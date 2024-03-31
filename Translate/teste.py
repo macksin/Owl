@@ -25,8 +25,8 @@ import os
 # Simulated translation function
 def traduzir_texto(texto, model=model):
     messages = [
-        {"role": "system", "content": "Você é um tradutor da área de tecnologia e programação, você traduz para o português brasileiro."},
-        {"role": "user", "content": f"traduza: {texto}"},
+        {"role": "system", "content": "Você é um tradutor da área de tecnologia e programação."},
+        {"role": "user", "content": f"Traduza o seguinte texto para o português brasileiro, mantendo palavras e jargões da área de TI em inglês.\n# Texto para traduzir\n{texto}\n"},
     ]
 
     answer = model.generate(
@@ -38,31 +38,69 @@ def traduzir_texto(texto, model=model):
 
     return answer
 
+import os
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Path to the cache folder where individual JSON files will be saved
+# Configuração inicial
 cache_folder = '.cache/instruct'
 os.makedirs(cache_folder, exist_ok=True)
 
-# Process each item in the JSON data
-for i, item in enumerate(instruct):
-    print(f"{i}/{len(instruct)}")
-    file_path = os.path.join(cache_folder, f"{i}.json")
-    
-    # Check if this item has already been processed by looking for its file
+def process_item(item, index):
+    file_path = os.path.join(cache_folder, f"{index}.json")
+
     if os.path.exists(file_path):
-        print(f"Skipping already processed item {i}.")
-        continue
+        return f"Skipping already processed item {index}."
 
-    try:
-        # Translate the 'instruction' and 'output' fields
-        item['instruction'] = traduzir_texto(item['instruction'])
-        item['output'] = traduzir_texto(item['output'])
-        
-        # Save the translated item to a separate JSON file in the cache folder
-        with open(file_path, 'w') as f:
-            json.dump(item, f, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error processing item {i}: {e}")
+    attempts = 0
+    max_attempts = 5
 
-# Output a message when processing is complete
+    while attempts < max_attempts:
+        try:
+            # Processamento do item, incluindo a tradução
+            item['instruction'] = traduzir_texto(item['instruction'])
+            item['output'] = traduzir_texto(item['output'])
+
+            with open(file_path, 'w') as f:
+                json.dump(item, f, ensure_ascii=False)
+
+            return f"Item {index} processed."
+        except Exception as e:
+            if "HTTP Error: 429" in str(e):
+                wait_time = 2 ** (attempts+3)  # Espera exponencial
+                print(f"Rate limit reached processing item {index}. Waiting {wait_time} seconds to retry...")
+                time.sleep(wait_time)
+                attempts += 1
+            else:
+                return f"Error processing item {index}: {e}"
+
+    return f"Failed to process item {index} after {max_attempts} attempts."
+
+def process_batch(batch, start_index):
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(process_item, item, index + start_index) for index, item in enumerate(batch)]
+        for future in as_completed(futures):
+            print(future.result())
+
+def divide_into_batches(data, batch_size):
+    for i in range(0, len(data), batch_size):
+        yield data[i:i+batch_size]
+
+def process_in_batches(instruct, batch_size, wait_between_batches):
+    start_index = 0
+    for batch in divide_into_batches(instruct, batch_size):
+        print(f"Processing batch starting with item {start_index}...")
+        process_batch(batch, start_index)
+        start_index += len(batch)  # Atualiza o índice inicial para o próximo lote
+        print(f"Completed batch. Waiting {wait_between_batches} seconds before the next batch...")
+        time.sleep(wait_between_batches)
+
+# Define o tamanho do lote e o tempo de espera entre os lotes
+batch_size = 5  # Ajuste conforme necessário
+wait_between_batches = 0.1  # Tempo de espera em segundos
+
+# Substitua `instruct` pelo seu conjunto de dados real
+process_in_batches(instruct, batch_size, wait_between_batches)
+
 print("Processing complete. Translated items are saved in the cache folder.")
